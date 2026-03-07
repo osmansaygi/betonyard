@@ -1,0 +1,18 @@
+bin/
+obj/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# Build artifacts
+*.user
+*.suo
+*.pdb
+*.cache
+
+# Archives
+*.zip
+*.ZIP
+*.rar

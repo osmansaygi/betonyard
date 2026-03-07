@@ -1,0 +1,9 @@
+Dinamik kütle oraný yeterli. Ok
+Deprem yapý salýnýmý: x=  0.00002  y=  0.00025
+Perde taban moment orani Cmx=0.56  Cmy=0.00
+R= 4 , Deprem eksantirisitesi= % 5  alinmistir.
+A1,B2  DÜZENSÝZLÝKLERÝNÝN KONTROLU
+1.2< nbi=1.915 <2  , modal analizle çözülmüþtür Ok
+TBDY 3.6.2.1 B2  düzensizliði saðlanmaktadýr. Ok
+TBDY 4.9.1.3 kosulu saðlanmaktadýr.   X max(di/hi)= 0.0004 < 0.008 Ok   Y max(di/hi)= 0.0004 < 0.008 Ok
+TBDY 4.9.2.2 koþulu saðlanmaktadýr.  max di=0.002 < 0.150 Ok
