@@ -1,0 +1,31 @@
+========================================
+ST4 → AutoCAD 3D - KULLANIM
+========================================
+
+Bu LISP, STA4CAD ST4 dosyasindan 3 boyutlu yapi modelini (kolon + doseme cercevesi) AutoCAD'e aktarir.
+
+KURULUM
+-------
+1. AutoCAD'i acin.
+2. APPLOAD (veya Araclar > Uygulama Yukle) ile ST4-to-AutoCAD-3D.lsp dosyasini secin ve Yukle deyin.
+3. Komut satirinda "ST4IMPORT" yazin veya Yukle butonuna basinca otomatik yuklenir.
+
+KULLANIM
+--------
+1. Komut: ST4IMPORT
+2. Acilan dosya secim penceresinden .ST4 dosyanizi secin (ornegin CC_02.ST4).
+3. LISP dosyayi okur, eksen/kat/kolon/doseme verilerini parse eder ve cizim yapar.
+4. Cizim bittikten sonra ZOOM Extents ile tum model gorunur.
+
+CIZILEN OGELLER
+---------------
+- ST4-KOLON katmani: Kolon eksenleri (dikey 3D cizgiler).
+- ST4-KIRIS katmani: Doseme panel cerceveleri (yatay dikdortgenler, her kat seviyesinde).
+
+NOTLAR
+------
+- ST4 dosyasi metin (ASCII) formatinda olmalidir; STA4CAD'in urettigi .ST4 dosyalari bu formatta.
+- Eksen verisi /Axis data/, kat yukseklikleri /Story/, kolonlar /Column axis data/, dosemeler /Floors Data/ bolumlerinden okunur.
+- Farkli STA4CAD surumlerinde bolum adlari degismezse ayni LISP calisir.
+
+========================================

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ST4 Aks Çizimi - CC_02</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 20px; background: #1a1a2e; color: #eee; }
+    h1 { color: #00d9ff; font-size: 1.4rem; }
+    .info { background: #16213e; padding: 16px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; line-height: 1.6; }
+    .info code { background: #0f3460; padding: 2px 6px; border-radius: 4px; }
+    .legend { display: flex; gap: 24px; margin: 12px 0; }
+    .legend span { display: flex; align-items: center; gap: 8px; }
+    .legend .dot { width: 16px; height: 4px; border-radius: 2px; }
+    .axis-1001 { background: #3b82f6; }
+    .axis-2001 { background: #ef4444; }
+    #canvas { background: #0f0f1a; border: 1px solid #333; border-radius: 8px; cursor: crosshair; display: block; }
+    .stats { margin-top: 12px; font-size: 12px; color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <h1>ST4 Aks Analizi ve Çizimi</h1>
+  <div class="info">
+    <strong>ST4 Aks Formatı:</strong><br>
+    • <code>/Axis data/</code> bölümünde her satır: <code>0, &lt;koordinat&gt;, 0, 0, 0</code><br>
+    • İkinci değer = koordinat (metre). İlk 27 aks → 1001 serisi (X), kalanlar → 2001 serisi (Y)<br>
+    • 1001 aksları: Dikey çizgiler (mavi). 2001 aksları: Yatay çizgiler (kırmızı)
+  </div>
+  <div class="legend">
+    <span><span class="dot axis-1001"></span> Aks 1001 (X)</span>
+    <span><span class="dot axis-2001"></span> Aks 2001 (Y)</span>
+  </div>
+  <canvas id="canvas" width="900" height="650"></canvas>
+  <div class="stats" id="stats"></div>
+
+  <script>
+    // CC_02.ST4'ten alınan aks verileri (2. sütun)
+    const axisData = [
+      0, 7.3, 7.6, 9.099998, 14.55, 19.55, 20.8, 21.1, 28.4, 15.05, 15.28, 1, 21.8, 27.4,
+      6.6, 11.55, 17, -0.3, 0.7, 11.25, 21.5, 28.7, 27.7, 17.3, 6.9, 12.88, 11.68,
+      0, 2.6, 5.649999, 5.999999, 9.849998, 1.4, 11.35, 11.65, 10.15
+    ];
+
+    const n1 = 27, n2 = axisData.length - n1;
+    const axis1001 = axisData.slice(0, n1);
+    const axis2001 = axisData.slice(n1);
+
+    const xMin = Math.min(...axis1001);
+    const xMax = Math.max(...axis1001);
+    const yMin = Math.min(...axis2001);
+    const yMax = Math.max(...axis2001);
+
+    const pad = 50;
+    const scale = Math.min(
+      (900 - 2 * pad) / (xMax - xMin || 1),
+      (650 - 2 * pad) / (yMax - yMin || 1)
+    );
+
+    function toX(x) { return pad + (x - xMin) * scale; }
+    function toY(y) { return 650 - pad - (y - yMin) * scale; }
+
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    function draw() {
+      ctx.fillStyle = '#0f0f1a';
+      ctx.fillRect(0, 0, 900, 650);
+
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // Aks 1001 - dikey çizgiler (mavi)
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 1.5;
+      axis1001.forEach((x, i) => {
+        ctx.beginPath();
+        ctx.moveTo(toX(x), toY(yMin));
+        ctx.lineTo(toX(x), toY(yMax));
+        ctx.stroke();
+        ctx.fillStyle = '#93c5fd';
+        ctx.fillText((i + 1).toString(), toX(x), toY(yMin) - 12);
+      });
+
+      // Aks 2001 - yatay çizgiler (kırmızı)
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 1.5;
+      axis2001.forEach((y, i) => {
+        ctx.beginPath();
+        ctx.moveTo(toX(xMin), toY(y));
+        ctx.lineTo(toX(xMax), toY(y));
+        ctx.stroke();
+        ctx.fillStyle = '#fca5a5';
+        ctx.textAlign = 'right';
+        ctx.fillText((i + 1).toString(), toX(xMin) - 8, toY(y));
+        ctx.textAlign = 'center';
+      });
+
+      ctx.fillStyle = '#94a3b8';
+      document.getElementById('stats').textContent =
+        `Aks 1001: ${axis1001.length} adet (X: ${xMin.toFixed(2)}–${xMax.toFixed(2)} m) | Aks 2001: ${axis2001.length} adet (Y: ${yMin.toFixed(2)}–${yMax.toFixed(2)} m)`;
+    }
+
+    draw();
+  </script>
+</body>
+</html>
