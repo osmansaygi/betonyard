@@ -61,7 +61,7 @@
                    poly-pts poly-idx sect-id poly-sect-id pos-idx vx vy pt rot-pt poly-offset
                    in-story story-lines story-parts floor-list floor-num floor-name floor-short floor-elev
                    floor-idx floor-width floor-gap offset-x offset-y floor-height row-gap
-                   beam-id beam-fixed beam-start beam-end beam-width beam-height beam-off beam-hw beam-loc beam-loc-use
+                   beam-id beam-fixed beam-start beam-end beam-width beam-height beam-off beam-hw beam-loc
                    b-ix1 b-iy1 b-ix2 b-iy2 beam-pt1 beam-pt2 beam-p1 beam-p2 beam-p3 beam-p4 beam-cx beam-cy
                    beam-floor beam-pos-x beam-pos-y beam-eg-x beam-eg-y beam-dx beam-dy beam-len beam-perp-x beam-perp-y)
   (vl-load-com)
@@ -665,11 +665,6 @@
               ((and (numberp beam-off) (> beam-off 0)) (setq beam-loc (- (/ beam-off 10.0) beam-hw)))
               (T (setq beam-loc 0.0))
             )
-            ;; Eski davranisla uyum: fixed Y-aksi (2001-2999) icin kaciklik yonunu tersle
-            (setq beam-loc-use beam-loc)
-            (if (and (>= beam-fixed 2001) (<= beam-fixed 2999))
-              (setq beam-loc-use (- beam-loc-use))
-            )
             ;; pt1 = kesisim(fixed,start), pt2 = kesisim(fixed,end)
             ;; Start/End ayni yon aks olsa bile ciz (kesisim varsa).
             (if (and (setq beam-pt1 (axis-intersection-point beam-fixed beam-start xlist ylist x-egim y-egim))
@@ -682,11 +677,11 @@
                 (if (> beam-len 1e-9)
                   (progn
                     (setq beam-perp-x (/ (- beam-dy) beam-len) beam-perp-y (/ beam-dx beam-len))
-                    (setq beam-p1 (list (+ (car beam-pt1) (* beam-perp-x (+ beam-loc-use beam-hw))) (+ (cadr beam-pt1) (* beam-perp-y (+ beam-loc-use beam-hw))) 0))
-                    (setq beam-p2 (list (+ (car beam-pt2) (* beam-perp-x (+ beam-loc-use beam-hw))) (+ (cadr beam-pt2) (* beam-perp-y (+ beam-loc-use beam-hw))) 0))
-                    (setq beam-p3 (list (+ (car beam-pt2) (* beam-perp-x (- beam-loc-use beam-hw))) (+ (cadr beam-pt2) (* beam-perp-y (- beam-loc-use beam-hw))) 0))
-                    (setq beam-p4 (list (+ (car beam-pt1) (* beam-perp-x (- beam-loc-use beam-hw))) (+ (cadr beam-pt1) (* beam-perp-y (- beam-loc-use beam-hw))) 0)))
-                  (progn (setq beam-cy (+ (cadr beam-pt1) beam-loc-use))
+                    (setq beam-p1 (list (+ (car beam-pt1) (* beam-perp-x (+ beam-loc beam-hw))) (+ (cadr beam-pt1) (* beam-perp-y (+ beam-loc beam-hw))) 0))
+                    (setq beam-p2 (list (+ (car beam-pt2) (* beam-perp-x (+ beam-loc beam-hw))) (+ (cadr beam-pt2) (* beam-perp-y (+ beam-loc beam-hw))) 0))
+                    (setq beam-p3 (list (+ (car beam-pt2) (* beam-perp-x (- beam-loc beam-hw))) (+ (cadr beam-pt2) (* beam-perp-y (- beam-loc beam-hw))) 0))
+                    (setq beam-p4 (list (+ (car beam-pt1) (* beam-perp-x (- beam-loc beam-hw))) (+ (cadr beam-pt1) (* beam-perp-y (- beam-loc beam-hw))) 0)))
+                  (progn (setq beam-cy (+ (cadr beam-pt1) beam-loc))
                          (setq beam-p1 (list (car beam-pt1) (- beam-cy beam-hw) 0) beam-p2 (list (car beam-pt2) (- beam-cy beam-hw) 0)
                                beam-p3 (list (car beam-pt2) (+ beam-cy beam-hw) 0) beam-p4 (list (car beam-pt1) (+ beam-cy beam-hw) 0))))
                 (entmake (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 layer-beams) '(100 . "AcDbPolyline") '(90 . 4) '(70 . 1)
