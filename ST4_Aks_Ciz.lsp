@@ -46,8 +46,334 @@
   result
 )
 
+;;; Ayni isimli kiris parcalarini (ayni fixed aks uzerinde) tek kiris haline getirir
+;;; Dondurdugu format: (beam-id fixed start end width height off wall-flag)
+(defun merge-same-id-beams-on-floor (beam-list floor-num xlist ylist x-egim y-egim / grouped passthrough result beam beam-id beam-fixed beam-start beam-end beam-width beam-height beam-off beam-floor
+                                                              beam-wall-flag pt1 pt2 dx dy len ux uy s1 s2 key seg grp segs min-s max-s min-axis max-axis item)
+  (setq grouped '() passthrough '() result '())
+  (foreach beam beam-list
+    (setq beam-id (car beam)
+          beam-fixed (cadr beam)
+          beam-start (caddr beam)
+          beam-end (nth 3 beam)
+          beam-width (nth 4 beam)
+          beam-height (nth 5 beam)
+          beam-off (if (>= (length beam) 7) (nth 6 beam) 0)
+          beam-wall-flag (if (>= (length beam) 8) (nth 7 beam) 0)
+          beam-floor (if (>= beam-id 1000) (fix (/ beam-id 1000)) (fix (/ beam-id 100))))
+    (if (= beam-floor floor-num)
+      (progn
+        (setq pt1 (axis-intersection-point beam-fixed beam-start xlist ylist x-egim y-egim))
+        (setq pt2 (axis-intersection-point beam-fixed beam-end xlist ylist x-egim y-egim))
+        (if (and pt1 pt2)
+          (progn
+            (setq dx (- (car pt2) (car pt1))
+                  dy (- (cadr pt2) (cadr pt1))
+                  len (sqrt (+ (* dx dx) (* dy dy))))
+            (if (> len 1e-9)
+              (progn
+                (setq ux (/ dx len) uy (/ dy len))
+                (setq s1 (+ (* (car pt1) ux) (* (cadr pt1) uy)))
+                (setq s2 (+ (* (car pt2) ux) (* (cadr pt2) uy)))
+                (if (> s1 s2)
+                  (progn
+                    (setq item s1 s1 s2 s2 item)
+                    (setq item beam-start beam-start beam-end beam-end item)
+                  )
+                )
+                (setq key (list beam-id beam-fixed beam-width beam-height beam-off beam-wall-flag))
+                (setq seg (list s1 s2 beam-start beam-end))
+                (setq grp (assoc key grouped))
+                (if grp
+                  (setq grouped (subst (cons key (cons seg (cdr grp))) grp grouped))
+                  (setq grouped (cons (cons key (list seg)) grouped))
+                )
+              )
+              (setq passthrough (cons beam passthrough))
+            )
+          )
+          (setq passthrough (cons beam passthrough))
+        )
+      )
+    )
+  )
+  (foreach grp grouped
+    (setq key (car grp) segs (cdr grp) min-s nil max-s nil min-axis nil max-axis nil)
+    (foreach seg segs
+      (if (or (null min-s) (< (car seg) min-s))
+        (progn
+          (setq min-s (car seg))
+          (setq min-axis (nth 2 seg))
+        )
+      )
+      (if (or (null max-s) (> (cadr seg) max-s))
+        (progn
+          (setq max-s (cadr seg))
+          (setq max-axis (nth 3 seg))
+        )
+      )
+    )
+    (if (and min-axis max-axis)
+      (setq result (cons (list (nth 0 key) (nth 1 key) min-axis max-axis (nth 2 key) (nth 3 key) (nth 4 key) (nth 5 key)) result))
+    )
+  )
+  (append (reverse result) (reverse passthrough))
+)
+
+;;; Beam ID'den kat numarasi
+(defun beam-floor-num (beam-id)
+  (if (>= beam-id 1000) (fix (/ beam-id 1000)) (fix (/ beam-id 100)))
+)
+
+;;; Ayni kiriş hatti mi? (fixed ayni, start/end sirasi serbest)
+(defun same-beam-trace-p (fixed start end bfixed bstart bend)
+  (and (= fixed bfixed)
+       (or (and (= start bstart) (= end bend))
+           (and (= start bend) (= end bstart))))
+)
+
+;;; Bir alt katta ayni hattan eleman var mi? (altinda bosluk kontrolu)
+(defun beam-has-below-support-p (beam-list floor-num fixed start end / found b)
+  (setq found nil)
+  (foreach b beam-list
+    (if (and (= (beam-floor-num (car b)) (1- floor-num))
+             (same-beam-trace-p fixed start end (cadr b) (caddr b) (nth 3 b)))
+      (setq found T)
+    )
+  )
+  found
+)
+
+;;; Beam Data'dan perde ayrimi (kural OR):
+;;; 1) Alti bos degil: iki ucta kolon VE (ilk katta temel kotu veya altta ayni hat destek)
+;;; 2) h > 220 cm
+;;; 3) h/b > 4
+(defun wall-beam-p (beam-width beam-height floor-num floor-min-num end-col-1-p end-col-2-p has-below-support / b h rule1 rule2 rule3)
+  (setq b (max 1.0 (abs (if beam-width beam-width 0.0))))
+  (setq h (abs (if beam-height beam-height 0.0)))
+  (setq rule1 (and end-col-1-p end-col-2-p
+                   (or (= floor-num floor-min-num) has-below-support)))
+  (setq rule2 (> h 220.0))
+  (setq rule3 (> (/ h b) 4.0))
+  (or rule1 rule2 rule3)
+)
+
+;;; Bu katta verilen aks kesisiminde aktif kolon var mi?
+(defun column-exists-at-floor-node (floor-num ax-id ay-id col-list col-dim-list polygon-col-positions / col col-num col-type sect-id)
+  (setq col nil)
+  (foreach c col-list
+    (if (and (= (caddr c) ax-id) (= (nth 3 c) ay-id))
+      (setq col c)
+    )
+  )
+  (if col
+    (progn
+      (setq col-num (car col)
+            col-type (cadr col)
+            sect-id (+ (* floor-num 100) col-num))
+      (cond
+        ((= col-type 3) (if (member sect-id polygon-col-positions) T nil))
+        (T (if (assoc sect-id col-dim-list) T nil))
+      )
+    )
+    nil
+  )
+)
+
+;;; Sayiyi verilen hassasiyette stringe cevirir (imza/karsilastirma icin)
+(defun fmt-num (n prec)
+  (rtos (if n n 0.0) 2 prec)
+)
+
+;;; LWPOLYLINE icin alan+bbox tabanli basit imza
+(defun lwpoly-signature (e / obj minpt maxpt minl maxl area)
+  (if (and e (= (cdr (assoc 0 (entget e))) "LWPOLYLINE"))
+    (progn
+      (setq obj (vlax-ename->vla-object e))
+      (setq minpt nil maxpt nil minl nil maxl nil area nil)
+      (if (not (vl-catch-all-error-p (vl-catch-all-apply 'vla-GetBoundingBox (list obj 'minpt 'maxpt))))
+        (progn
+          ;; Bazi surumlerde minpt/maxpt VARIANT, bazilarinda SAFEARRAY doner
+          (setq minl (vl-catch-all-apply 'vlax-safearray->list (list minpt)))
+          (if (vl-catch-all-error-p minl)
+            (setq minl (vl-catch-all-apply 'vlax-safearray->list (list (vlax-variant-value minpt))))
+          )
+          (setq maxl (vl-catch-all-apply 'vlax-safearray->list (list maxpt)))
+          (if (vl-catch-all-error-p maxl)
+            (setq maxl (vl-catch-all-apply 'vlax-safearray->list (list (vlax-variant-value maxpt))))
+          )
+          (setq area (vl-catch-all-apply 'vlax-curve-getArea (list e)))
+          (if (or (vl-catch-all-error-p minl) (vl-catch-all-error-p maxl) (vl-catch-all-error-p area))
+            nil
+            (strcat (fmt-num area 2) "|"
+                    (fmt-num (car minl) 1) "," (fmt-num (cadr minl) 1) "|"
+                    (fmt-num (car maxl) 1) "," (fmt-num (cadr maxl) 1))
+          )
+        )
+      )
+    )
+    nil
+  )
+)
+
+;;; Seed noktasinda polyline siniri olusturmayi dener (BPOLY -> -BOUNDARY -> BOUNDARY)
+(defun try-create-boundary-polyline (seed layer / before after ed result old-hpbound old-hpgaptol)
+  (setq result nil)
+  (setq old-hpbound (vl-catch-all-apply 'getvar (list "HPBOUND")))
+  (setq old-hpgaptol (vl-catch-all-apply 'getvar (list "HPGAPTOL")))
+  (if (not (vl-catch-all-error-p old-hpbound))
+    (vl-catch-all-apply 'setvar (list "HPBOUND" 1))
+  )
+  ;; Kucuk acikliklarda boundary kacirmasin (cm cizim olcegi icin toleransi bir miktar artir)
+  (if (not (vl-catch-all-error-p old-hpgaptol))
+    (vl-catch-all-apply 'setvar (list "HPGAPTOL" 20.0))
+  )
+  (foreach cmdargs (list
+                     (list "_.BPOLY" seed "")
+                     (list "_.-BOUNDARY" seed "")
+                     (list "_.BOUNDARY" seed ""))
+    (if (null result)
+      (progn
+        (setq before (entlast))
+        (vl-catch-all-apply 'vl-cmdf cmdargs)
+        (setq after (entlast))
+        (if (and after (/= after before))
+          (progn
+            (setq ed (entget after))
+            (if (= (cdr (assoc 0 ed)) "LWPOLYLINE")
+              (progn
+                (entmod (subst (cons 8 layer) (assoc 8 ed) ed))
+                (setq result after)
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+  (if (not (vl-catch-all-error-p old-hpbound))
+    (vl-catch-all-apply 'setvar (list "HPBOUND" old-hpbound))
+  )
+  (if (not (vl-catch-all-error-p old-hpgaptol))
+    (vl-catch-all-apply 'setvar (list "HPGAPTOL" old-hpgaptol))
+  )
+  result
+)
+
+;;; Layer gorunurlugunu kaydet, sadece verilen katmanlari acik birak
+(defun isolate-layers-for-boundary (keep-layers / doc lays lay name name-u keep-u state)
+  (setq state '())
+  (setq keep-u (mapcar '(lambda (s) (strcase s T)) keep-layers))
+  (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+  (setq lays (vla-get-Layers doc))
+  (vlax-for lay lays
+    (setq name (vla-get-Name lay))
+    (setq name-u (strcase name T))
+    (setq state (cons (list name (vla-get-LayerOn lay) (vla-get-Freeze lay)) state))
+    (if (member name-u keep-u)
+      (progn
+        (vl-catch-all-apply 'vla-put-Freeze (list lay :vlax-false))
+        (vl-catch-all-apply 'vla-put-LayerOn (list lay :vlax-true))
+      )
+      (progn
+        (vl-catch-all-apply 'vla-put-Freeze (list lay :vlax-false))
+        (vl-catch-all-apply 'vla-put-LayerOn (list lay :vlax-false))
+      )
+    )
+  )
+  state
+)
+
+;;; isolate-layers-for-boundary ile kaydedilen layer durumlarini geri yukle
+(defun restore-layer-visibility (state / doc lays rec lay)
+  (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+  (setq lays (vla-get-Layers doc))
+  (foreach rec state
+    (setq lay (vl-catch-all-apply 'vla-Item (list lays (car rec))))
+    (if (not (vl-catch-all-error-p lay))
+      (progn
+        (vl-catch-all-apply 'vla-put-Freeze (list lay (nth 2 rec)))
+        (vl-catch-all-apply 'vla-put-LayerOn (list lay (nth 1 rec)))
+      )
+    )
+  )
+  (princ)
+)
+
+;;; Katman acik/kapali durumunu guvenli degistirir
+(defun set-layer-on-safe (layer-name on-p / doc lays lay)
+  (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+  (setq lays (vla-get-Layers doc))
+  (setq lay (vl-catch-all-apply 'vla-Item (list lays layer-name)))
+  (if (not (vl-catch-all-error-p lay))
+    (vl-catch-all-apply 'vla-put-LayerOn (list lay (if on-p :vlax-true :vlax-false)))
+  )
+  (princ)
+)
+
+;;; Kiriş/kolonlarla kapanan alanlari polyline olarak cizer
+;;; Donus: olusturulan tekil alan adedi
+(defun draw-enclosed-areas-by-grid (xlist ylist x-egim y-egim offset-x offset-y layer-areas / i j ax1 ax2 ay1 ay2 p1 p2 p3 p4 seed after sig sigs ed created cands u v uu vv sx sy)
+  (setq sigs '() i 0 created 0)
+  (setvar "CLAYER" layer-areas)
+  (while (< i (1- (length xlist)))
+    (setq j 0)
+    (while (< j (1- (length ylist)))
+      (setq ax1 (+ 1001 i) ax2 (+ 1002 i) ay1 (+ 2001 j) ay2 (+ 2002 j))
+      (setq p1 (axis-intersection-point ax1 ay1 xlist ylist x-egim y-egim))
+      (setq p2 (axis-intersection-point ax2 ay1 xlist ylist x-egim y-egim))
+      (setq p3 (axis-intersection-point ax2 ay2 xlist ylist x-egim y-egim))
+      (setq p4 (axis-intersection-point ax1 ay2 xlist ylist x-egim y-egim))
+      (if (and p1 p2 p3 p4)
+        (progn
+          ;; Tek seed bazen sinira denk geliyor; hucre icinde 5x5 nokta dene
+          (setq cands nil)
+          (foreach u '(0.15 0.30 0.50 0.70 0.85)
+            (foreach v '(0.15 0.30 0.50 0.70 0.85)
+              (setq uu (- 1.0 u) vv (- 1.0 v))
+              ;; Bilinear ic nokta: p = (1-u)(1-v)p1 + u(1-v)p2 + uv p3 + (1-u)v p4
+              (setq sx (+ (* uu vv (car p1)) (* u vv (car p2)) (* u v (car p3)) (* uu v (car p4))))
+              (setq sy (+ (* uu vv (cadr p1)) (* u vv (cadr p2)) (* u v (cadr p3)) (* uu v (cadr p4))))
+              (setq cands (cons (list (+ offset-x sx) (+ offset-y sy) 0.0) cands))
+            )
+          )
+          (setq after nil)
+          (foreach seed cands
+            (if (null after)
+              (setq after (try-create-boundary-polyline seed layer-areas))
+            )
+          )
+          (if after
+            (progn
+              (setq ed (entget after))
+              (if (= (cdr (assoc 0 ed)) "LWPOLYLINE")
+                (progn
+                  (entmod (subst (cons 8 layer-areas) (assoc 8 ed) ed))
+                  (setq sig (lwpoly-signature after))
+                  (if (and sig (member sig sigs))
+                    (entdel after)
+                    (if sig
+                      (progn
+                        (setq sigs (cons sig sigs))
+                        (setq created (1+ created))
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+      (setq j (1+ j))
+    )
+    (setq i (1+ i))
+  )
+  created
+)
+
 (defun C:ST4AKS (/ st4file f line xlist ylist x-egim y-egim x y ycoord xmin xmax ymin ymax
-                   margin pt1 pt2 i textpt layer-axes layer-text layer-cols layer-colnum layer-beams
+                   margin pt1 pt2 i textpt layer-axes layer-text layer-cols layer-colnum layer-beams layer-walls
                    layer-axes-col layer-axes-nocol layer-axes-curr
                    x-axis-has-col y-axis-has-col
                    parsed all-values all-slopes in-axis-section in-colaxis in-beams result
@@ -60,10 +386,16 @@
                    polygon-section-offsets last-poly-sect-id pos-id
                    poly-pts poly-idx sect-id poly-sect-id pos-idx vx vy pt rot-pt poly-offset
                    in-story story-lines story-parts floor-list floor-num floor-name floor-short floor-elev
+                   floor-min-num
                    floor-idx floor-width floor-gap offset-x offset-y floor-height row-gap
-                   beam-id beam-fixed beam-start beam-end beam-width beam-height beam-off beam-hw beam-loc beam-loc-use
+                   beam-id beam-fixed beam-start beam-end beam-width beam-height beam-off beam-wall-flag beam-hw beam-loc beam-loc-use beam-is-wall
+                   end-col-1-p end-col-2-p has-below-support
                    b-ix1 b-iy1 b-ix2 b-iy2 beam-pt1 beam-pt2 beam-p1 beam-p2 beam-p3 beam-p4 beam-cx beam-cy
-                   beam-floor beam-pos-x beam-pos-y beam-eg-x beam-eg-y beam-dx beam-dy beam-len beam-perp-x beam-perp-y)
+                   beam-floor beam-pos-x beam-pos-y beam-eg-x beam-eg-y beam-dx beam-dy beam-len beam-perp-x beam-perp-y
+                   beam-ux beam-uy trim1 trim2 trim-sum trim-scale node1 node2 t1a t1b t2a t2b
+                   t1c t2c
+                   node1-poly node2-poly start-mid end-mid beam-pts beam-ang col-ang-1 col-ang-2 parallel-1 parallel-2
+                   wall-count)
   (vl-load-com)
   (progn
   ;; ST4 dosyasini sec
@@ -173,8 +505,10 @@
            (setq beam-width (atof (vl-string-trim " \t" (nth 1 parts))))
            (setq beam-height (atof (vl-string-trim " \t" (nth 2 parts))))
            (setq beam-off (if (>= (length parts) 8) (atoi (vl-string-trim " \t" (nth 7 parts))) 0))
+           ;; Beams Data 1. satir, alan #15 (nth 14): perde biti (1=perde)
+           (setq beam-wall-flag (if (>= (length parts) 15) (atoi (vl-string-trim " \t" (nth 14 parts))) 0))
            (if (<= beam-width 0) (setq beam-width 40.0))
-           (setq beam-list (append beam-list (list (list beam-id beam-fixed beam-start beam-end beam-width beam-height beam-off))))
+           (setq beam-list (append beam-list (list (list beam-id beam-fixed beam-start beam-end beam-width beam-height beam-off beam-wall-flag))))
          )
        )
       )
@@ -347,6 +681,13 @@
   (if (null floor-list)
     (setq floor-list (list (list 1 "KAT 1" "1" 0.0)))
   )
+  ;; Ilk kat (temel kotu referansi)
+  (setq floor-min-num nil)
+  (foreach fl floor-list
+    (if (or (null floor-min-num) (< (car fl) floor-min-num))
+      (setq floor-min-num (car fl))
+    )
+  )
   
   ;; Cizim sinirlari (cm) - Y: - degerler yukari, + degerler asagi (y = -deger)
   (setq margin 50)
@@ -411,6 +752,7 @@
   (setq layer-cols "ST4-KOLONLAR")
   (setq layer-colnum "ST4-KOLON-NUMARALARI")
   (setq layer-beams "ST4-KIRISLAR")
+  (setq layer-walls "ST4-PERDELER")
   (create-layer layer-axes 1)   ; Kirmizi (eski, artik kullanilmiyor)
   (create-layer layer-axes-col 1)   ; Kirmizi - kolonlardan gecen
   (create-layer layer-axes-nocol 8) ; Koyu gri - kolonlardan gecmeyen
@@ -418,10 +760,12 @@
   (create-layer layer-cols 3)   ; Yesil
   (create-layer layer-colnum 2) ; Sari
   (create-layer layer-beams 2)  ; Sari - kirisler
+  (create-layer layer-walls 6)  ; Magenta - perdeler
+  (setq wall-count 0)
   
   ;; Mevcut cizimi sakla
   (setvar "CMDECHO" 0)
-  (command "_.UNDO" "BEGIN")
+  (vl-cmdf "_.UNDO" "BEGIN")
   
   ;; Iki satir: 1) Ustte aks+kolon, 2) Altta aks+kolon+kiris
   (foreach row-idx (list 0 1)
@@ -650,10 +994,13 @@
   (if (and draw-beams-p beam-list)
     (progn
       (setvar "CLAYER" layer-beams)
-      (foreach beam beam-list
+      (foreach beam (merge-same-id-beams-on-floor beam-list floor-num xlist ylist x-egim y-egim)
         (setq beam-id (car beam) beam-fixed (cadr beam) beam-start (caddr beam) beam-end (nth 3 beam)
               beam-width (nth 4 beam) beam-height (nth 5 beam) beam-off (if (>= (length beam) 7) (nth 6 beam) 0)
+              beam-wall-flag (if (>= (length beam) 8) (nth 7 beam) 0)
               beam-floor (if (>= beam-id 1000) (fix (/ beam-id 1000)) (fix (/ beam-id 100))))
+        ;; Tum eski perde kurallari iptal: sadece Beams Data alan #15 biti
+        (setq beam-is-wall (= beam-wall-flag 1))
         (if (= beam-floor floor-num)
           (progn
             (setq beam-hw (/ beam-width 2.0))
@@ -670,6 +1017,7 @@
             (if (and (>= beam-fixed 2001) (<= beam-fixed 2999))
               (setq beam-loc-use (- beam-loc-use))
             )
+            (setq beam-pts nil)
             ;; pt1 = kesisim(fixed,start), pt2 = kesisim(fixed,end)
             ;; Start/End ayni yon aks olsa bile ciz (kesisim varsa).
             (if (and (setq beam-pt1 (axis-intersection-point beam-fixed beam-start xlist ylist x-egim y-egim))
@@ -681,30 +1029,78 @@
                       beam-len (sqrt (+ (* beam-dx beam-dx) (* beam-dy beam-dy))))
                 (if (> beam-len 1e-9)
                   (progn
-                    (setq beam-perp-x (/ (- beam-dy) beam-len) beam-perp-y (/ beam-dx beam-len))
-                    (setq beam-p1 (list (+ (car beam-pt1) (* beam-perp-x (+ beam-loc-use beam-hw))) (+ (cadr beam-pt1) (* beam-perp-y (+ beam-loc-use beam-hw))) 0))
-                    (setq beam-p2 (list (+ (car beam-pt2) (* beam-perp-x (+ beam-loc-use beam-hw))) (+ (cadr beam-pt2) (* beam-perp-y (+ beam-loc-use beam-hw))) 0))
-                    (setq beam-p3 (list (+ (car beam-pt2) (* beam-perp-x (- beam-loc-use beam-hw))) (+ (cadr beam-pt2) (* beam-perp-y (- beam-loc-use beam-hw))) 0))
-                    (setq beam-p4 (list (+ (car beam-pt1) (* beam-perp-x (- beam-loc-use beam-hw))) (+ (cadr beam-pt1) (* beam-perp-y (- beam-loc-use beam-hw))) 0)))
-                  (progn (setq beam-cy (+ (cadr beam-pt1) beam-loc-use))
-                         (setq beam-p1 (list (car beam-pt1) (- beam-cy beam-hw) 0) beam-p2 (list (car beam-pt2) (- beam-cy beam-hw) 0)
-                               beam-p3 (list (car beam-pt2) (+ beam-cy beam-hw) 0) beam-p4 (list (car beam-pt1) (+ beam-cy beam-hw) 0))))
-                (entmake (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 layer-beams) '(100 . "AcDbPolyline") '(90 . 4) '(70 . 1)
-                              (cons 10 (list (car beam-p1) (cadr beam-p1))) (cons 10 (list (car beam-p2) (cadr beam-p2)))
-                              (cons 10 (list (car beam-p3) (cadr beam-p3))) (cons 10 (list (car beam-p4) (cadr beam-p4)))))
-                (setq beam-cx (/ (+ (car beam-p1) (car beam-p3)) 2.0) beam-cy (/ (+ (cadr beam-p1) (cadr beam-p3)) 2.0))
+                    (setq beam-ux (/ beam-dx beam-len) beam-uy (/ beam-dy beam-len))
+                    ;; Perde olarak ayrilanlarda trim uygulama, kirişlerde uygula
+                    (if (not beam-is-wall)
+                      (progn
+                        ;; Dinamik arama: boyuna gore ileri mesafe + yan band
+                        (setq trim-scale (max 25.0 (min 140.0 (* beam-len 0.45))))
+                        (setq t1a (max (+ beam-hw 35.0) 45.0))
+                        (setq trim1
+                          (beam-trim-distance-any-column
+                            floor-num
+                            (- (car beam-pt1) offset-x) (- (cadr beam-pt1) offset-y)
+                            beam-ux beam-uy
+                            trim-scale t1a
+                            xlist ylist x-egim y-egim
+                            col-list col-dim-list polygon-col-positions polygon-col-section-ids polygon-sections
+                          )
+                        )
+                        (setq trim2
+                          (beam-trim-distance-any-column
+                            floor-num
+                            (- (car beam-pt2) offset-x) (- (cadr beam-pt2) offset-y)
+                            (- beam-ux) (- beam-uy)
+                            trim-scale t1a
+                            xlist ylist x-egim y-egim
+                            col-list col-dim-list polygon-col-positions polygon-col-section-ids polygon-sections
+                          )
+                        )
+                        (setq trim1 (max 0.0 trim1) trim2 (max 0.0 trim2))
+                        (setq trim-sum (+ trim1 trim2))
+                        (if (> trim-sum (- beam-len 1.0))
+                          (progn
+                            (setq trim-scale (/ (max 0.0 (- beam-len 1.0)) (if (> trim-sum 1e-9) trim-sum 1.0)))
+                            (setq trim1 (* trim1 trim-scale) trim2 (* trim2 trim-scale))
+                          )
+                        )
+                        (setq beam-pt1 (list (+ (car beam-pt1) (* beam-ux trim1)) (+ (cadr beam-pt1) (* beam-uy trim1)) 0))
+                        (setq beam-pt2 (list (- (car beam-pt2) (* beam-ux trim2)) (- (cadr beam-pt2) (* beam-uy trim2)) 0))
+                        (setq beam-dx (- (car beam-pt2) (car beam-pt1)) beam-dy (- (cadr beam-pt2) (cadr beam-pt1))
+                              beam-len (sqrt (+ (* beam-dx beam-dx) (* beam-dy beam-dy))))
+                      )
+                    )
+                    (if (> beam-len 1e-9)
+                      (progn
+                        (setq beam-perp-x (/ (- beam-dy) beam-len) beam-perp-y (/ beam-dx beam-len))
+                        (setq beam-p1 (list (+ (car beam-pt1) (* beam-perp-x (+ beam-loc-use beam-hw))) (+ (cadr beam-pt1) (* beam-perp-y (+ beam-loc-use beam-hw))) 0))
+                        (setq beam-p2 (list (+ (car beam-pt2) (* beam-perp-x (+ beam-loc-use beam-hw))) (+ (cadr beam-pt2) (* beam-perp-y (+ beam-loc-use beam-hw))) 0))
+                        (setq beam-p3 (list (+ (car beam-pt2) (* beam-perp-x (- beam-loc-use beam-hw))) (+ (cadr beam-pt2) (* beam-perp-y (- beam-loc-use beam-hw))) 0))
+                        (setq beam-p4 (list (+ (car beam-pt1) (* beam-perp-x (- beam-loc-use beam-hw))) (+ (cadr beam-pt1) (* beam-perp-y (- beam-loc-use beam-hw))) 0))
+                        (setq beam-cx (/ (+ (car beam-p1) (car beam-p2) (car beam-p3) (car beam-p4)) 4.0))
+                        (setq beam-cy (/ (+ (cadr beam-p1) (cadr beam-p2) (cadr beam-p3) (cadr beam-p4)) 4.0))
+                        (setq beam-pts (list beam-p1 beam-p2 beam-p3 beam-p4))
+                      )
+                    )
+                  )
+                )
+                (if (and beam-pts (>= (length beam-pts) 4))
+                  (progn
+                    (entmake (make-poly-entlist beam-pts (if beam-is-wall layer-walls layer-beams)))
+                    (if beam-is-wall (setq wall-count (1+ wall-count)))
+                  )
+                )
                 (setvar "CLAYER" layer-text)
                 (entmake (list '(0 . "TEXT") (cons 10 (list beam-cx beam-cy 0)) (cons 40 6) (cons 1 (itoa beam-id)) (cons 7 "Standard") (cons 8 layer-text)
                               (cons 72 1) (cons 11 (list beam-cx beam-cy 0)) (cons 73 2)))
-                (setvar "CLAYER" layer-beams)
+                (setvar "CLAYER" (if beam-is-wall layer-walls layer-beams))
               )
             )
         )
       )
     )
   )
-  ) ; if draw-beams-p
-  
+  )
   ;; Eksen etiketlerini yaz
   (setvar "CLAYER" layer-text)
   (setq i 0)
@@ -770,15 +1166,25 @@
   ) ; foreach floor-info
   ) ; foreach row-idx
   
-  (command "_.UNDO" "END")
+  (vl-cmdf "_.UNDO" "END")
   (setvar "CMDECHO" 1)
   
   ;; Zoom extents
-  (command "_.ZOOM" "_E")
+  (vl-cmdf "_.ZOOM" "_E")
+
+  ;; Istek: aks ve id katmanlari her zaman kapali kalsin
+  (setvar "CLAYER" layer-beams)
+  (set-layer-on-safe layer-axes nil)
+  (set-layer-on-safe layer-axes-col nil)
+  (set-layer-on-safe layer-axes-nocol nil)
+  (set-layer-on-safe layer-text nil)
+  (set-layer-on-safe layer-colnum nil)
   
   (princ (strcat "\n" (itoa (length floor-list)) " kat, " (itoa (length xlist)) " X ekseni, "
                  (itoa (length ylist)) " Y ekseni, " (itoa (length col-list)) " kolon/kat"
-                 (if beam-list (strcat ", " (itoa (length beam-list)) " kiris") "") " cizildi. (cm)"))
+                 (if beam-list (strcat ", " (itoa (length beam-list)) " kiris") "")
+                 (if (> wall-count 0) (strcat ", " (itoa wall-count) " perde") "")
+                 " cizildi. (cm)"))
   (princ)
   )
 )
@@ -890,6 +1296,359 @@
       )
     )
   )
+)
+
+;;; Iki axis id'den (ax-id ay-id) ciftini dondurur; biri X biri Y degilse nil
+(defun beam-node-axis-xy (a b)
+  (cond
+    ((and (>= a 1001) (<= a 1999) (>= b 2001) (<= b 2999)) (list a b))
+    ((and (>= a 2001) (<= a 2999) (>= b 1001) (<= b 1999)) (list b a))
+    (T nil)
+  )
+)
+
+;;; Belirli bir noddaki kolona gore, p noktasindan u yonunde trim mesafesi (cm)
+(defun column-trim-distance-at-point (floor-num ax-id ay-id nx ny px py ux uy col-list col-dim-list polygon-col-positions polygon-col-section-ids polygon-sections
+                                        / col col-num col-type off1 off2 col-ang sect-id dims cw ch hw hh
+                                          loc-x loc-y ang-rad cosa sina offx offy cx cy pos-idx poly-sect-id poly-pts poly-pts-g
+                                          hit rx ry m1 m2 discr root t1 t2 p1 p2 p3 p4 eps)
+  (setq eps 1e-6)
+  (setq col nil)
+  (foreach c col-list
+    (if (and (= (caddr c) ax-id) (= (nth 3 c) ay-id))
+      (setq col c)
+    )
+  )
+  (if col
+    (progn
+      (setq col-num (car col)
+            col-type (cadr col)
+            off1 (nth 4 col)
+            off2 (nth 5 col)
+            col-ang (if (>= (length col) 7) (nth 6 col) 0.0)
+            sect-id (+ (* floor-num 100) col-num))
+      (setq cw 40.0 ch 40.0)
+      (if (and col-dim-list (setq dims (cdr (assoc sect-id col-dim-list))))
+        (setq cw (car dims) ch (cadr dims))
+      )
+      (setq hw (/ cw 2.0) hh (/ ch 2.0))
+      ;; Axis->kolon merkezi lokal ofseti (kolon cizimi ile ayni)
+      (cond
+        ((= off1 -1) (setq loc-x hw))
+        ((= off1 1) (setq loc-x (- hw)))
+        ((and (numberp off1) (< off1 0)) (setq loc-x (+ (/ off1 10.0) hw)))
+        ((and (numberp off1) (> off1 0)) (setq loc-x (- (/ off1 10.0) hw)))
+        (T (setq loc-x 0.0))
+      )
+      (cond
+        ((= off2 -1) (setq loc-y (- hh)))
+        ((= off2 1) (setq loc-y hh))
+        ((and (numberp off2) (< off2 0)) (setq loc-y (+ (/ off2 -10.0) (- hh))))
+        ((and (numberp off2) (> off2 0)) (setq loc-y (+ (/ off2 -10.0) hh)))
+        (T (setq loc-y 0.0))
+      )
+      (if (and (numberp col-ang) (not (equal col-ang 0.0 1e-9)))
+        (progn
+          (setq ang-rad (* col-ang (/ pi 180.0)) cosa (cos ang-rad) sina (sin ang-rad))
+          (setq offx (- (* loc-x cosa) (* loc-y sina))
+                offy (+ (* loc-x sina) (* loc-y cosa)))
+        )
+        (setq offx loc-x offy loc-y)
+      )
+      (setq cx (+ nx offx) cy (+ ny offy))
+      (setq hit nil)
+      (cond
+        ;; Tip 3: Poligon kolonlarda hassas ray-kenar kesisimi
+        ((= col-type 3)
+         (if (and polygon-col-positions polygon-col-section-ids
+                  (setq pos-idx (vl-position sect-id polygon-col-positions))
+                  (< pos-idx (length polygon-col-section-ids)))
+           (progn
+             (setq poly-sect-id (nth pos-idx polygon-col-section-ids))
+             (setq poly-pts (cdr (assoc poly-sect-id polygon-sections)))
+             (if (and poly-pts (> (length poly-pts) 2))
+               (progn
+                 ;; Kolon cizimiyle birebir ayni merkez/aci donusumu
+                 (setq poly-pts-g (poly-local-to-global poly-pts cx cy))
+                 (if (and (numberp col-ang) (not (equal col-ang 0.0 1e-9)))
+                   (setq poly-pts-g (poly-rotate-pts poly-pts-g cx cy col-ang))
+                 )
+                 (setq hit (polygon-ray-hit-distance (list px py) ux uy poly-pts-g))
+               )
+             )
+           )
+         )
+        )
+        ;; Tip 2: Yuvarlak kolon - analitik isin/cember kesisimi
+        ((= col-type 2)
+         (setq rx (- px cx) ry (- py cy))
+         (setq m1 (+ (* rx ux) (* ry uy)))
+         (setq m2 (- (+ (* rx rx) (* ry ry)) (* (max hw hh) (max hw hh))))
+         (setq discr (- (* m1 m1) m2))
+         (if (>= discr 0.0)
+           (progn
+             (setq root (sqrt discr))
+             (setq t1 (- (- m1) root))
+             (setq t2 (+ (- m1) root))
+             (cond
+               ((and (> t1 eps) (> t2 eps)) (setq hit (min t1 t2)))
+               ((> t1 eps) (setq hit t1))
+               ((> t2 eps) (setq hit t2))
+             )
+           )
+         )
+        )
+        ;; Tip 1 ve fallback: dikdortgeni poligon gibi kes
+        (T
+         (setq p1 (list (- cx hw) (- cy hh) 0))
+         (setq p2 (list (+ cx hw) (- cy hh) 0))
+         (setq p3 (list (+ cx hw) (+ cy hh) 0))
+         (setq p4 (list (- cx hw) (+ cy hh) 0))
+         (if (and (numberp col-ang) (not (equal col-ang 0.0 1e-9)))
+           (progn
+             (setq p1 (car (poly-rotate-pts (list p1) cx cy col-ang)))
+             (setq p2 (car (poly-rotate-pts (list p2) cx cy col-ang)))
+             (setq p3 (car (poly-rotate-pts (list p3) cx cy col-ang)))
+             (setq p4 (car (poly-rotate-pts (list p4) cx cy col-ang)))
+           )
+         )
+         (setq hit (polygon-ray-hit-distance (list px py) ux uy (list p1 p2 p3 p4)))
+        )
+      )
+      (if hit (max 0.0 hit) 0.0)
+    )
+    0.0
+  )
+)
+
+;;; p noktasindan u yonunde, bu kattaki tum kolonlar icin en yakin trim mesafesi
+(defun beam-trim-distance-any-column (floor-num px py ux uy max-local search-band xlist ylist x-egim y-egim col-list col-dim-list polygon-col-positions polygon-col-section-ids polygon-sections
+                                      / min-d d nxny ax-id ay-id wx wy tproj perp)
+  ;; Adaylari kiriş doğrultusu ve yan bandina gore filtrele
+  (setq min-d nil)
+  (foreach c col-list
+    (setq ax-id (caddr c) ay-id (nth 3 c))
+    (setq nxny (axis-intersection-point ax-id ay-id xlist ylist x-egim y-egim))
+    (if nxny
+      (progn
+        (setq wx (- (car nxny) px) wy (- (cadr nxny) py))
+        (setq tproj (+ (* wx ux) (* wy uy)))
+        (setq perp (abs (- (* wx uy) (* wy ux))))
+        (if (and (> tproj -1e-6) (< tproj max-local) (<= perp search-band))
+          (progn
+            (setq d
+              (column-trim-distance-at-point
+                floor-num
+                ax-id ay-id
+                (car nxny) (cadr nxny)
+                px py ux uy
+                col-list col-dim-list polygon-col-positions polygon-col-section-ids polygon-sections
+              )
+            )
+            (if (and d (> d 1e-6) (< d max-local) (or (null min-d) (< d min-d)))
+              (setq min-d d)
+            )
+          )
+        )
+      )
+    )
+  )
+  (if min-d min-d 0.0)
+)
+
+;;; Noddaki kolon konturunu global koordinatta dondurur (tip1/tip3), aksi halde nil
+(defun node-column-polygon (floor-num ax-id ay-id nx ny col-list col-dim-list polygon-col-positions polygon-col-section-ids polygon-sections
+                             / col col-num col-type off1 off2 col-ang sect-id dims cw ch hw hh
+                               loc-x loc-y ang-rad cosa sina offx offy cx cy p1 p2 p3 p4
+                               pos-idx poly-sect-id poly-pts poly-pts-g)
+  (setq col nil)
+  (foreach c col-list
+    (if (and (= (caddr c) ax-id) (= (nth 3 c) ay-id)) (setq col c))
+  )
+  (if col
+    (progn
+      (setq col-num (car col)
+            col-type (cadr col)
+            off1 (nth 4 col)
+            off2 (nth 5 col)
+            col-ang (if (>= (length col) 7) (nth 6 col) 0.0)
+            sect-id (+ (* floor-num 100) col-num))
+      (setq cw 40.0 ch 40.0)
+      (if (and col-dim-list (setq dims (cdr (assoc sect-id col-dim-list))))
+        (setq cw (car dims) ch (cadr dims))
+      )
+      (setq hw (/ cw 2.0) hh (/ ch 2.0))
+      (cond
+        ((= off1 -1) (setq loc-x hw))
+        ((= off1 1) (setq loc-x (- hw)))
+        ((and (numberp off1) (< off1 0)) (setq loc-x (+ (/ off1 10.0) hw)))
+        ((and (numberp off1) (> off1 0)) (setq loc-x (- (/ off1 10.0) hw)))
+        (T (setq loc-x 0.0))
+      )
+      (cond
+        ((= off2 -1) (setq loc-y (- hh)))
+        ((= off2 1) (setq loc-y hh))
+        ((and (numberp off2) (< off2 0)) (setq loc-y (+ (/ off2 -10.0) (- hh))))
+        ((and (numberp off2) (> off2 0)) (setq loc-y (+ (/ off2 -10.0) hh)))
+        (T (setq loc-y 0.0))
+      )
+      (if (and (numberp col-ang) (not (equal col-ang 0.0 1e-9)))
+        (progn
+          (setq ang-rad (* col-ang (/ pi 180.0)) cosa (cos ang-rad) sina (sin ang-rad))
+          (setq offx (- (* loc-x cosa) (* loc-y sina))
+                offy (+ (* loc-x sina) (* loc-y cosa)))
+        )
+        (setq offx loc-x offy loc-y)
+      )
+      (setq cx (+ nx offx) cy (+ ny offy))
+      (cond
+        ((= col-type 1)
+         (setq p1 (list (- cx hw) (- cy hh) 0)
+               p2 (list (+ cx hw) (- cy hh) 0)
+               p3 (list (+ cx hw) (+ cy hh) 0)
+               p4 (list (- cx hw) (+ cy hh) 0))
+         (if (and (numberp col-ang) (not (equal col-ang 0.0 1e-9)))
+           (progn
+             (setq p1 (car (poly-rotate-pts (list p1) cx cy col-ang)))
+             (setq p2 (car (poly-rotate-pts (list p2) cx cy col-ang)))
+             (setq p3 (car (poly-rotate-pts (list p3) cx cy col-ang)))
+             (setq p4 (car (poly-rotate-pts (list p4) cx cy col-ang)))
+           )
+         )
+         (list p1 p2 p3 p4)
+        )
+        ((= col-type 3)
+         (if (and polygon-col-positions polygon-col-section-ids
+                  (setq pos-idx (vl-position sect-id polygon-col-positions))
+                  (< pos-idx (length polygon-col-section-ids)))
+           (progn
+             (setq poly-sect-id (nth pos-idx polygon-col-section-ids))
+             (setq poly-pts (cdr (assoc poly-sect-id polygon-sections)))
+             (if (and poly-pts (> (length poly-pts) 2))
+               (progn
+                 (setq poly-pts-g (poly-local-to-global poly-pts cx cy))
+                 (if (and (numberp col-ang) (not (equal col-ang 0.0 1e-9)))
+                   (setq poly-pts-g (poly-rotate-pts poly-pts-g cx cy col-ang))
+                 )
+                 poly-pts-g
+               )
+             )
+           )
+         )
+        )
+      )
+    )
+  )
+)
+
+;;; Noddaki kolon acisini dondurur (derece), bulunamazsa nil
+(defun node-column-angle (ax-id ay-id col-list / ang)
+  (setq ang nil)
+  (foreach c col-list
+    (if (and (= (caddr c) ax-id) (= (nth 3 c) ay-id))
+      (setq ang (if (>= (length c) 7) (nth 6 c) 0.0))
+    )
+  )
+  ang
+)
+
+;;; Nokta p, [a,b] segmenti uzerinde mi?
+(defun point-on-segment-p (p a b tol / cross dot len2)
+  (setq cross (- (* (- (car p) (car a)) (- (cadr b) (cadr a)))
+                 (* (- (cadr p) (cadr a)) (- (car b) (car a)))))
+  (if (> (abs cross) tol)
+    nil
+    (progn
+      (setq dot (+ (* (- (car p) (car a)) (- (car b) (car a)))
+                   (* (- (cadr p) (cadr a)) (- (cadr b) (cadr a)))))
+      (setq len2 (+ (* (- (car b) (car a)) (- (car b) (car a)))
+                    (* (- (cadr b) (cadr a)) (- (cadr b) (cadr a)))))
+      (and (>= dot (- tol)) (<= dot (+ len2 tol)))
+    )
+  )
+)
+
+;;; Noktanin uzerinde oldugu poligon kenar indexini bulur
+(defun polygon-edge-index-for-point (p poly / n i a b)
+  (setq n (length poly) i 0)
+  (while (and (< i n) (not (point-on-segment-p p (nth i poly) (nth (rem (1+ i) n) poly) 1e-5)))
+    (setq i (1+ i))
+  )
+  (if (< i n) i nil)
+)
+
+;;; Nokta listesi zincir uzunlugu
+(defun polyline-chain-length (pts / total i)
+  (setq total 0.0 i 0)
+  (while (< i (1- (length pts)))
+    (setq total (+ total (distance (nth i pts) (nth (1+ i) pts))))
+    (setq i (1+ i))
+  )
+  total
+)
+
+;;; pa->pb arasinda kolon konturunden gecen ara koseleri dondurur (endpoints haric)
+(defun beam-cap-intermediate-vertices (pa pb poly / n ia ib fwd bwd e pathf pathb lenf lenb)
+  (setq n (length poly))
+  (if (< n 3)
+    nil
+    (progn
+      (setq ia (polygon-edge-index-for-point pa poly))
+      (setq ib (polygon-edge-index-for-point pb poly))
+      (if (or (null ia) (null ib) (= ia ib))
+        nil
+        (progn
+          ;; ileri yon: edge ia -> ... -> edge ib
+          (setq fwd nil e ia)
+          (while (/= e ib)
+            (setq fwd (append fwd (list (nth (rem (1+ e) n) poly))))
+            (setq e (rem (1+ e) n))
+          )
+          ;; geri yon: edge ia -> ... -> edge ib
+          (setq bwd nil e ia)
+          (while (/= e ib)
+            (setq bwd (append bwd (list (nth e poly))))
+            (setq e (if (= e 0) (1- n) (1- e)))
+          )
+          (setq pathf (append (list pa) fwd (list pb)))
+          (setq pathb (append (list pa) bwd (list pb)))
+          (setq lenf (polyline-chain-length pathf))
+          (setq lenb (polyline-chain-length pathb))
+          (if (<= lenf lenb) fwd bwd)
+        )
+      )
+    )
+  )
+)
+
+;;; p + t*u (t>=0) isinini poligon kenarlariyla kesisitirir, en yakin t'yi dondurur
+(defun polygon-ray-hit-distance (p ux uy pts / n i a b ax ay bx by vx vy wx wy d hit-t hit-s tmin eps)
+  (setq eps 1e-6)
+  (setq n (length pts) i 0 tmin nil)
+  (if (and pts (> n 1))
+    (progn
+      (while (< i n)
+        (setq a (nth i pts)
+              b (nth (rem (1+ i) n) pts)
+              ax (car a) ay (cadr a)
+              bx (car b) by (cadr b)
+              vx (- bx ax) vy (- by ay)
+              wx (- ax (car p)) wy (- ay (cadr p))
+              d (- (* ux vy) (* uy vx)))
+        (if (> (abs d) 1e-12)
+          (progn
+            (setq hit-t (/ (- (* wx vy) (* wy vx)) d))
+            (setq hit-s (/ (- (* wx uy) (* wy ux)) d))
+            (if (and (> hit-t eps) (>= hit-s -1e-9) (<= hit-s (+ 1.0 1e-9)))
+              (if (or (null tmin) (< hit-t tmin)) (setq tmin hit-t))
+            )
+          )
+        )
+        (setq i (1+ i))
+      )
+    )
+  )
+  tmin
 )
 
 ;;; Sayiyi harfe cevirir: 1->A, 2->B, ..., 26->Z, 27->AA, ...
